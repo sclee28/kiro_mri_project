@@ -1,0 +1,245 @@
+{
+  "Comment": "MRI Image Analysis Pipeline",
+  "StartAt": "SegmentImage",
+  "States": {
+    "SegmentImage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SegmentationLambdaArn}",
+        "Payload": {
+          "job_id.$": "$.job_id",
+          "bucket_name.$": "$.bucket_name",
+          "object_key.$": "$.object_key",
+          "execution_id.$": "$.execution_id"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "HandleSegmentationError"
+        }
+      ],
+      "Next": "ImageToText",
+      "ResultPath": "$.segmentation_result"
+    },
+    "HandleSegmentationError": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ErrorHandlerLambdaArn}",
+        "Payload": {
+          "error.$": "$.error",
+          "job_id.$": "$.job_id",
+          "stage": "segmentation",
+          "execution_id.$": "$.execution_id"
+        }
+      },
+      "Next": "FailExecution",
+      "ResultPath": "$.error_handler_result"
+    },
+    "ImageToText": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${VLMLambdaArn}",
+        "Payload": {
+          "job_id.$": "$.job_id",
+          "segmentation_result.$": "$.segmentation_result.Payload",
+          "execution_id.$": "$.execution_id"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "HandleVLMError"
+        }
+      ],
+      "Next": "EnhanceWithLLM",
+      "ResultPath": "$.vlm_result"
+    },
+    "HandleVLMError": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ErrorHandlerLambdaArn}",
+        "Payload": {
+          "error.$": "$.error",
+          "job_id.$": "$.job_id",
+          "stage": "vlm_processing",
+          "execution_id.$": "$.execution_id"
+        }
+      },
+      "Next": "FailExecution",
+      "ResultPath": "$.error_handler_result"
+    },
+    "EnhanceWithLLM": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${LLMRAGLambdaArn}",
+        "Payload": {
+          "job_id.$": "$.job_id",
+          "vlm_result.$": "$.vlm_result.Payload",
+          "execution_id.$": "$.execution_id"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "HandleLLMError"
+        }
+      ],
+      "Next": "StoreResults",
+      "ResultPath": "$.llm_result"
+    },
+    "HandleLLMError": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ErrorHandlerLambdaArn}",
+        "Payload": {
+          "error.$": "$.error",
+          "job_id.$": "$.job_id",
+          "stage": "llm_enhancement",
+          "execution_id.$": "$.execution_id"
+        }
+      },
+      "Next": "FailExecution",
+      "ResultPath": "$.error_handler_result"
+    },
+    "StoreResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ResultsStorageLambdaArn}",
+        "Payload": {
+          "job_id.$": "$.job_id",
+          "segmentation_result.$": "$.segmentation_result.Payload",
+          "vlm_result.$": "$.vlm_result.Payload",
+          "llm_result.$": "$.llm_result.Payload",
+          "execution_id.$": "$.execution_id"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "HandleStorageError"
+        }
+      ],
+      "Next": "NotifySuccess",
+      "ResultPath": "$.storage_result"
+    },
+    "HandleStorageError": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ErrorHandlerLambdaArn}",
+        "Payload": {
+          "error.$": "$.error",
+          "job_id.$": "$.job_id",
+          "stage": "results_storage",
+          "execution_id.$": "$.execution_id"
+        }
+      },
+      "Next": "FailExecution",
+      "ResultPath": "$.error_handler_result"
+    },
+    "NotifySuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${NotificationLambdaArn}",
+        "Payload": {
+          "job_id.$": "$.job_id",
+          "status": "completed",
+          "execution_id.$": "$.execution_id"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "End": true,
+      "ResultPath": "$.notification_result"
+    },
+    "FailExecution": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${NotificationLambdaArn}",
+        "Payload": {
+          "job_id.$": "$.job_id",
+          "status": "failed",
+          "error.$": "$.error",
+          "execution_id.$": "$.execution_id"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "End": true,
+      "ResultPath": "$.notification_result"
+    }
+  },
+  "TimeoutSeconds": 3600,
+  "TracingConfiguration": {
+    "Enabled": true
+  },
+  "LoggingConfiguration": {
+    "Level": "ALL",
+    "IncludeExecutionData": true,
+    "Destinations": [
+      {
+        "CloudWatchLogsLogGroup": {
+          "LogGroupArn": "${StepFunctionsLogGroupArn}"
+        }
+      }
+    ]
+  }
+}

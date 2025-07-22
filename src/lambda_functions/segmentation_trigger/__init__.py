@@ -1,0 +1,1 @@
+# MRI Segmentation trigger Lambda function
