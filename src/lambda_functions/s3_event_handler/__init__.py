@@ -1,1 +1,0 @@
-# S3 event handler Lambda function

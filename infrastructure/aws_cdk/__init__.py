@@ -1,1 +1,0 @@
-# AWS CDK infrastructure definitions
